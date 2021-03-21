@@ -43,6 +43,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Train DeepSpeech model on TPU using librispeech dataset"
     )
+    parser.add_argument(
+        "--tpu-cores", type=int, default=8, choices=[1, 8]
+    )
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--num-workers", type=int, default=1)
@@ -92,11 +95,9 @@ def data_processing(data, alphabet):
     return spectrograms, labels, input_lengths, label_lengths
 
 
-def train_deepspeech():
+def train_deepspeech(args):
     np.random.seed(200)
     torch.manual_seed(200)
-
-    args = parse_args()
 
     # Using the serial executor avoids multiple processes to
     # download the same data.
@@ -174,13 +175,8 @@ def train_deepspeech():
 
 
 def main():
-    pre_spawn_parser = argparse.ArgumentParser()
-    pre_spawn_parser.add_argument(
-        "--tpu-cores", type=int, default=8, choices=[1, 8]
-    )
-    pre_spawn_flags, _ = pre_spawn_parser.parse_known_args()
-    train_deepspeech()
-    xmp.spawn(train_deepspeech, args=(), nprocs=pre_spawn_flags.tpu_cores)
+    flags = parse_args()
+    xmp.spawn(train_deepspeech, args=(flags,), nprocs=flags.tpu_cores)
 
 
 if __name__ == '__main__':
