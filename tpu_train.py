@@ -95,9 +95,11 @@ def data_processing(data, alphabet):
     return spectrograms, labels, input_lengths, label_lengths
 
 
-def train_deepspeech(args):
+def train_deepspeech():
     np.random.seed(200)
     torch.manual_seed(200)
+
+    args = parse_args()
 
     # Using the serial executor avoids multiple processes to
     # download the same data.
@@ -176,7 +178,7 @@ def train_deepspeech(args):
 
 def main():
     flags = parse_args()
-    xmp.spawn(train_deepspeech, args=(flags,), nprocs=flags.tpu_cores)
+    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores)
 
 
 if __name__ == '__main__':
