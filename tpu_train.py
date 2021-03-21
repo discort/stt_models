@@ -95,7 +95,7 @@ def data_processing(data, alphabet):
     return spectrograms, labels, input_lengths, label_lengths
 
 
-def train_deepspeech():
+def train_deepspeech(*_args):
     np.random.seed(200)
     torch.manual_seed(200)
 
