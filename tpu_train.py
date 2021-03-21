@@ -56,7 +56,9 @@ def parse_args():
     return args
 
 
-def get_dataset(args):
+def get_dataset():
+    args = parse_args()
+
     if not os.path.exists(args.datadir):
         os.makedirs(args.datadir)
 
