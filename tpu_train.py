@@ -21,6 +21,12 @@ from models import DeepSpeech
 
 SERIAL_EXEC = xmp.MpSerialExecutor()
 
+alphabet = Alphabet()
+
+
+def collate_data_process(x):
+    return data_processing(x, alphabet)
+
 
 class TransformLIBRISPEECH(torchaudio.datasets.LIBRISPEECH):
     def __init__(self, *args, transform=None, **kwargs):
@@ -99,15 +105,11 @@ def train_deepspeech(*_args):
 
     args = parse_args()
 
-    alphabet = Alphabet()
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
 
     # Using the serial executor avoids multiple processes to
     # download the same data.
     train_dataset, test_dataset = SERIAL_EXEC.run(get_dataset)
-
-    def collate_data_process(x):
-        return data_processing(x, alphabet)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
