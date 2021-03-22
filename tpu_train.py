@@ -157,9 +157,9 @@ def train_deepspeech(*_args):
             tracker.add(args.batch_size)
 
             if i % args.log_steps == 0:
-                print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
-                      xm.get_ordinal(), i, loss.item(), tracker.rate(),
-                      tracker.global_rate(), time.asctime()), flush=True)
+                xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
+                                xm.get_ordinal(), i, loss.item(), tracker.rate(),
+                                tracker.global_rate(), time.asctime()), flush=True)
 
     def test_loop_fn(loader):
         model.eval()
@@ -170,8 +170,8 @@ def train_deepspeech(*_args):
                 out = model(inputs)
                 loss = criterion(out, labels, input_lengths, label_lengths)
                 if i % args.log_steps == 0:
-                    print('[xla:{}]({}) Val Loss={:.5f}'.format(
-                          xm.get_ordinal(), i, loss.item()), flush=True)
+                    xm.master_print('[xla:{}]({}) Val Loss={:.5f}'.format(
+                                    xm.get_ordinal(), i, loss.item()), flush=True)
 
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
