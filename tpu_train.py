@@ -13,6 +13,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.debug.metrics as met
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
+import torch_xla.test.test_utils as test_utils
 
 from alphabet import Alphabet
 from models import DeepSpeech
@@ -23,9 +24,14 @@ SERIAL_EXEC = xmp.MpSerialExecutor()
 alphabet = Alphabet()
 
 
-def _train_print(device, step, loss, rate, global_rate):
-    xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
-                    device, step, loss, rate, global_rate, time.asctime()), flush=True)
+def _train_print(device, step, loss, tracker, writer):
+    test_utils.print_training_update(
+        device,
+        step,
+        loss.item(),
+        tracker.rate(),
+        tracker.global_rate(),
+        summary_writer=writer)
 
 
 def collate_data_process(x):
@@ -58,6 +64,7 @@ def parse_args():
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--datadir", default='/tmp/librispeech')
     parser.add_argument("--log-steps", type=int, default=10)
+    parser.add_argument('--logdir', type=str, default=None)
     args = parser.parse_args()
     return args
 
@@ -109,8 +116,6 @@ def train_deepspeech(*_args):
 
     args = parse_args()
 
-    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
-
     # Using the serial executor avoids multiple processes to
     # download the same data.
     train_dataset, test_dataset = SERIAL_EXEC.run(get_dataset)
@@ -141,7 +146,11 @@ def train_deepspeech(*_args):
 
     # Get loss function, optimizer, and model
     device = xm.xla_device()
+    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
+    writer = None
+    if xm.is_master_ordinal():
+        writer = test_utils.get_summary_writer(flags.logdir)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28).to(device)
 
@@ -161,10 +170,7 @@ def train_deepspeech(*_args):
             tracker.add(args.batch_size)
 
             if step % args.log_steps == 0:
-                xm.add_step_closure(
-                    _train_print,
-                    args=(xm.get_ordinal(), step, loss.item(),
-                          tracker.rate(), tracker.global_rate()))
+                xm.add_step_closure(_train_print, args=(device, step, loss, tracker, writer))
 
     def test_loop_fn(loader):
         model.eval()
