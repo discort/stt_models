@@ -21,11 +21,6 @@ from models import DeepSpeech
 
 SERIAL_EXEC = xmp.MpSerialExecutor()
 
-# Only instantiate model weights once in memory.
-alphabet = Alphabet()
-model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
-WRAPPED_MODEL = xmp.MpModelWrapper(model)
-
 
 class TransformLIBRISPEECH(torchaudio.datasets.LIBRISPEECH):
     def __init__(self, *args, transform=None, **kwargs):
@@ -80,29 +75,14 @@ def get_dataset():
     return train_dataset, test_dataset
 
 
-def data_processing(data, alphabet):
-    spectrograms = []
-    labels = []
-    input_lengths = []
-    label_lengths = []
-    for spec, _, utterance in data:
-        spec = spec.squeeze(0).transpose(0, 1)
-        spectrograms.append(spec)
-        label = torch.Tensor(alphabet.text_to_int(utterance.lower())).to(torch.long)
-        labels.append(label)
-        input_lengths.append(spec.shape[0] // 2)
-        label_lengths.append(len(label))
-
-    spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
-    labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-    return spectrograms, labels, input_lengths, label_lengths
-
-
 def train_deepspeech(*_args):
     np.random.seed(200)
     torch.manual_seed(200)
 
     args = parse_args()
+
+    alphabet = Alphabet()
+    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
 
     # Using the serial executor avoids multiple processes to
     # download the same data.
@@ -113,6 +93,24 @@ def train_deepspeech(*_args):
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
         shuffle=True)
+
+    def data_processing(data, alphabet):
+        spectrograms = []
+        labels = []
+        input_lengths = []
+        label_lengths = []
+        for spec, _, utterance in data:
+            spec = spec.squeeze(0).transpose(0, 1)
+            spectrograms.append(spec)
+            label = torch.Tensor(alphabet.text_to_int(utterance.lower())).to(torch.long)
+            labels.append(label)
+            input_lengths.append(spec.shape[0] // 2)
+            label_lengths.append(len(label))
+
+        spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+        return spectrograms, labels, input_lengths, label_lengths
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -133,7 +131,7 @@ def train_deepspeech(*_args):
 
     # Get loss function, optimizer, and model
     device = xm.xla_device()
-    model = WRAPPED_MODEL.to(device)
+    model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28).to(device)
 
@@ -181,8 +179,7 @@ def train_deepspeech(*_args):
 
 def main():
     flags = parse_args()
-    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores,
-              start_method='fork')
+    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores)
 
 
 if __name__ == '__main__':
