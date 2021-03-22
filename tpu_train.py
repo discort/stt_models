@@ -150,7 +150,7 @@ def train_deepspeech(*_args):
     model = model.to(device)
     writer = None
     if xm.is_master_ordinal():
-        writer = test_utils.get_summary_writer(flags.logdir)
+        writer = test_utils.get_summary_writer(args.logdir)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28).to(device)
 
