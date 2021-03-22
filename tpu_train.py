@@ -13,7 +13,6 @@ import torch_xla.core.xla_model as xm
 import torch_xla.debug.metrics as met
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.utils.utils as xu
 
 from alphabet import Alphabet
 from models import DeepSpeech
@@ -22,6 +21,11 @@ from models import DeepSpeech
 SERIAL_EXEC = xmp.MpSerialExecutor()
 
 alphabet = Alphabet()
+
+
+def _train_print(device, step, loss, rate, global_rate):
+    xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
+                    device, step, loss, rate, global_rate, time.asctime()), flush=True)
 
 
 def collate_data_process(x):
@@ -144,7 +148,7 @@ def train_deepspeech(*_args):
     def train_loop_fn(loader):
         tracker = xm.RateTracker()
         model.train()
-        for i, data in enumerate(loader):
+        for step, data in enumerate(loader):
             inputs, labels, input_lengths, label_lengths = data
             inputs, labels = inputs.to(device), labels.to(device)
             # zero the parameter gradients
@@ -156,22 +160,23 @@ def train_deepspeech(*_args):
             xm.optimizer_step(optimizer)
             tracker.add(args.batch_size)
 
-            if i % args.log_steps == 0:
-                xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
-                                xm.get_ordinal(), i, loss.item(), tracker.rate(),
-                                tracker.global_rate(), time.asctime()), flush=True)
+            if step % args.log_steps == 0:
+                xm.add_step_closure(
+                    _train_print,
+                    args=(xm.get_ordinal(), step, loss.item(),
+                          tracker.rate(), tracker.global_rate()))
 
     def test_loop_fn(loader):
         model.eval()
         with torch.no_grad():
-            for i, data in enumerate(loader):
+            for step, data in enumerate(loader):
                 inputs, labels, input_lengths, label_lengths = data
                 inputs, labels = inputs.to(device), labels.to(device)
                 out = model(inputs)
                 loss = criterion(out, labels, input_lengths, label_lengths)
-                if i % args.log_steps == 0:
+                if step % args.log_steps == 0:
                     xm.master_print('[xla:{}]({}) Val Loss={:.5f}'.format(
-                                    xm.get_ordinal(), i, loss.item()), flush=True)
+                                    xm.get_ordinal(), step, loss.item()), flush=True)
 
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
