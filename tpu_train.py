@@ -52,6 +52,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--datadir", default='/tmp/librispeech')
+    parser.add_argument("--log-steps", type=int, default=10)
     args = parser.parse_args()
     return args
 
@@ -180,7 +181,8 @@ def train_deepspeech(*_args):
 
 def main():
     flags = parse_args()
-    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores)
+    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores,
+              start_method='fork')
 
 
 if __name__ == '__main__':
