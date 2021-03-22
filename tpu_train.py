@@ -52,6 +52,24 @@ def parse_args():
     return args
 
 
+def data_processing(data, alphabet):
+    spectrograms = []
+    labels = []
+    input_lengths = []
+    label_lengths = []
+    for spec, _, utterance in data:
+        spec = spec.squeeze(0).transpose(0, 1)
+        spectrograms.append(spec)
+        label = torch.Tensor(alphabet.text_to_int(utterance.lower())).to(torch.long)
+        labels.append(label)
+        input_lengths.append(spec.shape[0] // 2)
+        label_lengths.append(len(label))
+
+    spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
+    labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+    return spectrograms, labels, input_lengths, label_lengths
+
+
 def get_dataset():
     args = parse_args()
 
@@ -88,42 +106,28 @@ def train_deepspeech(*_args):
     # download the same data.
     train_dataset, test_dataset = SERIAL_EXEC.run(get_dataset)
 
+    def collate_data_process(x):
+        return data_processing(x, alphabet)
+
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
         shuffle=True)
 
-    def data_processing(data, alphabet):
-        spectrograms = []
-        labels = []
-        input_lengths = []
-        label_lengths = []
-        for spec, _, utterance in data:
-            spec = spec.squeeze(0).transpose(0, 1)
-            spectrograms.append(spec)
-            label = torch.Tensor(alphabet.text_to_int(utterance.lower())).to(torch.long)
-            labels.append(label)
-            input_lengths.append(spec.shape[0] // 2)
-            label_lengths.append(len(label))
-
-        spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
-        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-        return spectrograms, labels, input_lengths, label_lengths
-
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         sampler=train_sampler,
         num_workers=args.num_workers,
-        collate_fn=lambda x: data_processing(x, alphabet),
+        collate_fn=collate_data_process,
         drop_last=True)
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=lambda x: data_processing(x, alphabet),
+        collate_fn=collate_data_process,
         drop_last=True)
 
     # Scale learning rate to world size
