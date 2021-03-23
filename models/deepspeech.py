@@ -9,10 +9,22 @@ class FullyConnected(nn.Module):
         hidden_size: Internal hidden unit size.
     """
 
-    def __init__(self, in_features, hidden_size):
+    def __init__(self,
+                 in_features: int,
+                 hidden_size: int,
+                 dropout: float,
+                 relu_max_clip: int = 20) -> None:
         super(FullyConnected, self).__init__()
         self.fc = nn.Linear(in_features, hidden_size, bias=True)
-        self.nonlinearity = nn.ReLU()
+        self.nonlinearity = nn.Sequential(*[
+            nn.ReLU(),
+            nn.Hardtanh(0, relu_max_clip)
+        ])
+        if dropout:
+            self.nonlinearity = nn.Sequential(*[
+                self.nonlinearity,
+                nn.Dropout(dropout)
+            ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc(x)
@@ -31,18 +43,22 @@ class DeepSpeech(nn.Module):
         num_classes: Number of output classes
     """
 
-    def __init__(self, in_features: int, hidden_size: int, num_classes: int):
+    def __init__(self,
+                 in_features: int,
+                 hidden_size: int,
+                 num_classes: int,
+                 dropout: float = 0.0) -> None:
         super(DeepSpeech, self).__init__()
         self.hidden_size = hidden_size
         # The first three layers are not recurrent
-        self.fc1 = FullyConnected(in_features, hidden_size)
-        self.fc2 = FullyConnected(hidden_size, hidden_size)
-        self.fc3 = FullyConnected(hidden_size, hidden_size)
+        self.fc1 = FullyConnected(in_features, hidden_size, dropout)
+        self.fc2 = FullyConnected(hidden_size, hidden_size, dropout)
+        self.fc3 = FullyConnected(hidden_size, hidden_size, dropout)
         # The fourth layer is a bi-directional recurrent layer
         self.bi_rnn = nn.RNN(
             hidden_size, hidden_size, num_layers=1, nonlinearity='relu', bidirectional=True)
         self.nonlinearity = nn.ReLU()
-        self.fc4 = FullyConnected(hidden_size, hidden_size)
+        self.fc4 = FullyConnected(hidden_size, hidden_size, dropout)
         # The output layer is a standard softmax function
         # that yields the predicted character probabilities
         # for each time slice t and character k in the alphabet

@@ -152,9 +152,6 @@ def train_deepspeech(*_args):
     device = xm.xla_device()
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
-    writer = None
-    if xm.is_master_ordinal():
-        writer = test_utils.get_summary_writer(args.logdir)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28).to(device)
 
@@ -175,9 +172,9 @@ def train_deepspeech(*_args):
             tracker.add(args.batch_size)
 
             if step % args.log_steps == 0:
-                print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
-                      xm.get_ordinal(), step, loss.item(), tracker.rate(),
-                      tracker.global_rate(), time.asctime()), flush=True)
+                xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
+                                xm.get_ordinal(), step, loss.item(), tracker.rate(),
+                                tracker.global_rate(), time.asctime()), flush=True)
 
     def test_loop_fn(loader):
         model.eval()
