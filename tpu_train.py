@@ -19,8 +19,6 @@ from alphabet import Alphabet
 from models import DeepSpeech
 
 
-SERIAL_EXEC = xmp.MpSerialExecutor()
-
 alphabet = Alphabet()
 
 
@@ -114,15 +112,9 @@ def get_dataset():
     return train_dataset, test_dataset
 
 
-def train_deepspeech(*_args):
+def train_deepspeech(index, args, train_dataset, test_dataset):
     np.random.seed(200)
     torch.manual_seed(200)
-
-    args = parse_args()
-
-    # Using the serial executor avoids multiple processes to
-    # download the same data.
-    train_dataset, test_dataset = SERIAL_EXEC.run(get_dataset)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -153,7 +145,7 @@ def train_deepspeech(*_args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=28).to(device)
+    criterion = nn.CTCLoss(blank=28)
 
     def train_loop_fn(loader):
         tracker = xm.RateTracker()
@@ -199,10 +191,7 @@ def train_deepspeech(*_args):
         test_loop_fn(test_device_loader)
 
 
-def main():
-    flags = parse_args()
-    xmp.spawn(train_deepspeech, args=(), nprocs=flags.tpu_cores)
-
-
 if __name__ == '__main__':
-    main()
+    flags = parse_args()
+    train_dataset, test_dataset = get_dataset()
+    xmp.spawn(train_deepspeech, args=(flags, train_dataset, test_dataset), nprocs=flags.tpu_cores)
