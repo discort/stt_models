@@ -84,7 +84,11 @@ def data_processing(data, alphabet):
 
     spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
     labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-    return spectrograms, labels, input_lengths, label_lengths
+    return (
+        spectrograms,
+        labels,
+        torch.Tensor(input_lengths).to(torch.long),
+        torch.Tensor(label_lengths).to(torch.long))
 
 
 def get_dataset():
@@ -160,6 +164,7 @@ def train_deepspeech(*_args):
         for step, data in enumerate(loader):
             inputs, labels, input_lengths, label_lengths = data
             inputs, labels = inputs.to(device), labels.to(device)
+            input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
             # zero the parameter gradients
             optimizer.zero_grad()
 
@@ -180,6 +185,7 @@ def train_deepspeech(*_args):
             for step, data in enumerate(loader):
                 inputs, labels, input_lengths, label_lengths = data
                 inputs, labels = inputs.to(device), labels.to(device)
+                input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
                 out = model(inputs)
                 loss = criterion(out, labels, input_lengths, label_lengths)
                 if step % args.log_steps == 0:
