@@ -170,7 +170,9 @@ def train_deepspeech(*_args):
             tracker.add(args.batch_size)
 
             if step % args.log_steps == 0:
-                xm.add_step_closure(_train_print, args=(device, step, loss, tracker, writer))
+                print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
+                      xm.get_ordinal(), step, loss.item(), tracker.rate(),
+                      tracker.global_rate(), time.asctime()), flush=True)
 
     def test_loop_fn(loader):
         model.eval()
@@ -184,14 +186,14 @@ def train_deepspeech(*_args):
                     xm.master_print('[xla:{}]({}) Val Loss={:.5f}'.format(
                                     xm.get_ordinal(), step, loss.item()), flush=True)
 
+    train_device_loader = pl.MpDeviceLoader(train_loader, device)
+    test_device_loader = pl.MpDeviceLoader(test_loader, device)
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
-        para_loader = pl.ParallelLoader(train_loader, [device])
-        train_loop_fn(para_loader.per_device_loader(device))
-        xm.master_print("Finished training epoch {}".format(epoch))
-
-        para_loader = pl.ParallelLoader(test_loader, [device])
-        test_loop_fn(para_loader.per_device_loader(device))
+        xm.master_print('Epoch {} train begin {}'.format(epoch, test_utils.now()))
+        train_loop_fn(train_device_loader)
+        xm.master_print('Epoch {} train end {}'.format(epoch, test_utils.now()))
+        test_loop_fn(test_device_loader)
 
 
 def main():
