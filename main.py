@@ -6,33 +6,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchaudio
-import torchaudio.transforms as transforms
 
 from alphabet import Alphabet
+from dataset import split_dataset
 from models import DeepSpeech
 
 np.random.seed(200)
 torch.manual_seed(200)
 
 
-alphabet = Alphabet()
-
-
-def collate_data_process(x):
-    return data_processing(x, alphabet)
-
-
-class TransformLIBRISPEECH(torchaudio.datasets.LIBRISPEECH):
-    def __init__(self, *args, transform=None, **kwargs):
-        super(TransformLIBRISPEECH, self).__init__(*args, **kwargs)
-        self.transform = transform
-
-    def __getitem__(self, n):
-        inputs, sample_rate, utterance, _, _, _ = super().__getitem__(n)
-        if self.transform:
-            inputs = self.transform(inputs)
-        return inputs, sample_rate, utterance
+def model_length_function(tensor):
+    return int(tensor.shape[0]) // 2 + 1
 
 
 def parse_args():
@@ -56,54 +40,37 @@ def parse_args():
     return args
 
 
-def data_processing(data, alphabet):
-    spectrograms = []
-    labels = []
-    input_lengths = []
-    label_lengths = []
-    for spec, _, utterance in data:
-        spec = spec.squeeze(0).transpose(0, 1)
-        spectrograms.append(spec)
-        label = torch.Tensor(alphabet.text_to_int(utterance.lower())).to(torch.long)
-        labels.append(label)
-        input_lengths.append(spec.shape[0] // 2)
-        label_lengths.append(len(label))
+def collate_factory(model_length_function):
+    """
+    Based on
+    https://github.com/pytorch/audio/blob/14dd917ec60fa69ce3f7c6e3f2eaf520e67928b5/examples/pipeline_wav2letter/datasets.py
+    """
 
-    spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1)
-    labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-    return (
-        spectrograms,
-        labels,
-        torch.Tensor(input_lengths).to(torch.long),
-        torch.Tensor(label_lengths).to(torch.long))
+    def collate_fn(batch):
+        inputs = [b[0].squeeze(0).transpose(0, 1) for b in batch]
+        input_lengths = torch.tensor(
+            [model_length_function(i) for i in inputs],
+            dtype=torch.long,
+            device=inputs[0].device,
+        )
+        inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
 
+        labels = [b[1] for b in batch]
+        label_lengths = torch.tensor(
+            [label.shape[0] for label in labels],
+            dtype=torch.long,
+            device=inputs.device,
+        )
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+        return inputs, input_lengths, labels, label_lengths
 
-def get_dataset(args):
-    if not os.path.exists(args.datadir):
-        os.makedirs(args.datadir)
-
-    sample_rate = 16000
-    win_len = 20  # in milliseconds
-    n_fft = int(sample_rate * win_len / 1000)  # 320
-    hop_size = 10  # in milliseconds
-    hop_length = int(sample_rate * hop_size / 1000)  # 160
-    transform = nn.Sequential(*[
-        transforms.Spectrogram(n_fft=n_fft, hop_length=hop_length),
-    ])
-    dataset = TransformLIBRISPEECH(
-        root=args.datadir, url="dev-clean", download=True, transform=transform)
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(
-        dataset, [train_size, test_size])
-    return train_dataset, test_dataset
+    return collate_fn
 
 
 def train_loop_fn(args, loader, optimizer, model, criterion, device):
     running_loss = 0.0
     model.train()
-    for step, data in enumerate(loader):
-        inputs, labels, input_lengths, label_lengths = data
+    for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
         inputs, labels = inputs.to(device), labels.to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
@@ -124,9 +91,7 @@ def test_loop_fn(args, loader, model, criterion, device):
     running_loss = 0.0
     model.eval()
     with torch.no_grad():
-        for step, data in enumerate(loader):
-            inputs, labels, input_lengths, label_lengths = data
-            inputs, labels = inputs.to(device), labels.to(device)
+        for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
             running_loss += loss.detach() * inputs.size(0)
@@ -138,7 +103,9 @@ def _main_xla(index, args):
     import torch_xla.debug.metrics as met
     import torch_xla.distributed.parallel_loader as pl
 
-    train_dataset, test_dataset = get_dataset(args)
+    alphabet = Alphabet()
+    train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
+    collate_fn = collate_factory(model_length_function)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
         num_replicas=xm.xrt_world_size(),
@@ -150,14 +117,14 @@ def _main_xla(index, args):
         batch_size=args.batch_size,
         sampler=train_sampler,
         num_workers=args.num_workers,
-        collate_fn=collate_data_process,
+        collate_fn=collate_fn,
         drop_last=True)
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_data_process,
+        collate_fn=collate_fn,
         drop_last=True)
 
     # Scale learning rate to world size
@@ -197,17 +164,20 @@ def _main_xla(index, args):
 
 
 def main(index, args):
-    train_dataset, test_dataset = get_dataset(args)
+    alphabet = Alphabet()
+    train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
+    collate_fn = collate_factory(model_length_function)
+
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=collate_data_process)
+        collate_fn=collate_fn)
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=collate_data_process)
+        collate_fn=collate_fn)
 
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
