@@ -223,7 +223,6 @@ def main(index, args):
 
 
 def spawn_main(main, args):
-    import pudb; pudb.set_trace()
     if args.use_tpu:
         import torch_xla.distributed.xla_multiprocessing as xmp
         xmp.spawn(_main_xla, args=(args,), nprocs=args.world_size)
