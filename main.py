@@ -8,28 +8,15 @@ import torch.nn as nn
 import torch.optim as optim
 import torchaudio
 import torchaudio.transforms as transforms
-import torch_xla
-import torch_xla.core.xla_model as xm
-import torch_xla.debug.metrics as met
-import torch_xla.distributed.parallel_loader as pl
-import torch_xla.distributed.xla_multiprocessing as xmp
-import torch_xla.test.test_utils as test_utils
 
 from alphabet import Alphabet
 from models import DeepSpeech
 
+np.random.seed(200)
+torch.manual_seed(200)
+
 
 alphabet = Alphabet()
-
-
-def _train_print(device, step, loss, tracker, writer):
-    test_utils.print_training_update(
-        device,
-        step,
-        loss.item(),
-        tracker.rate(),
-        tracker.global_rate(),
-        summary_writer=writer)
 
 
 def collate_data_process(x):
@@ -52,8 +39,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Train DeepSpeech model on TPU using librispeech dataset"
     )
+    # Device args
+    parser.add_argument("--use-tpu", type=bool, default=False)
     parser.add_argument(
-        "--tpu-cores", type=int, default=8, choices=[1, 8]
+        "--world-size", type=int, default=8, choices=[1, 8]
     )
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--momentum", type=float, default=0.9)
@@ -89,9 +78,7 @@ def data_processing(data, alphabet):
         torch.Tensor(label_lengths).to(torch.long))
 
 
-def get_dataset():
-    args = parse_args()
-
+def get_dataset(args):
     if not os.path.exists(args.datadir):
         os.makedirs(args.datadir)
 
@@ -112,10 +99,46 @@ def get_dataset():
     return train_dataset, test_dataset
 
 
-def train_deepspeech(index, args, train_dataset, test_dataset):
-    np.random.seed(200)
-    torch.manual_seed(200)
+def train_loop_fn(args, loader, optimizer, model, criterion, device):
+    running_loss = 0.0
+    model.train()
+    for step, data in enumerate(loader):
+        inputs, labels, input_lengths, label_lengths = data
+        inputs, labels = inputs.to(device), labels.to(device)
+        # zero the parameter gradients
+        optimizer.zero_grad()
 
+        out = model(inputs)
+        loss = criterion(out, labels, input_lengths, label_lengths)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.detach() * inputs.size(0)
+
+        if step % args.log_steps == 0:
+            print('({}) Loss={:.5f} Time={}'.format(
+                  step, loss.item(), time.asctime()), flush=True)
+
+
+def test_loop_fn(args, loader, model, criterion, device):
+    running_loss = 0.0
+    model.eval()
+    with torch.no_grad():
+        for step, data in enumerate(loader):
+            inputs, labels, input_lengths, label_lengths = data
+            inputs, labels = inputs.to(device), labels.to(device)
+            out = model(inputs)
+            loss = criterion(out, labels, input_lengths, label_lengths)
+            running_loss += loss.detach() * inputs.size(0)
+
+
+def _main_xla(index, args):
+    import torch_xla
+    import torch_xla.core.xla_model as xm
+    import torch_xla.debug.metrics as met
+    import torch_xla.distributed.parallel_loader as pl
+
+    train_dataset, test_dataset = get_dataset(args)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
         num_replicas=xm.xrt_world_size(),
@@ -147,51 +170,67 @@ def train_deepspeech(index, args, train_dataset, test_dataset):
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28)
 
-    def train_loop_fn(loader):
-        tracker = xm.RateTracker()
-        model.train()
-        for step, data in enumerate(loader):
-            inputs, labels, input_lengths, label_lengths = data
-            inputs, labels = inputs.to(device), labels.to(device)
-            input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
-            # zero the parameter gradients
-            optimizer.zero_grad()
-
-            out = model(inputs)
-            loss = criterion(out, labels, input_lengths, label_lengths)
-            loss.backward()
-            xm.optimizer_step(optimizer)
-            tracker.add(args.batch_size)
-
-            if step % args.log_steps == 0:
-                xm.master_print('[xla:{}]({}) Loss={:.5f} Rate={:.2f} GlobalRate={:.2f} Time={}'.format(
-                                xm.get_ordinal(), step, loss.item(), tracker.rate(),
-                                tracker.global_rate(), time.asctime()), flush=True)
-
-    def test_loop_fn(loader):
-        model.eval()
-        with torch.no_grad():
-            for step, data in enumerate(loader):
-                inputs, labels, input_lengths, label_lengths = data
-                inputs, labels = inputs.to(device), labels.to(device)
-                input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
-                out = model(inputs)
-                loss = criterion(out, labels, input_lengths, label_lengths)
-                if step % args.log_steps == 0:
-                    xm.master_print('[xla:{}]({}) Val Loss={:.5f}'.format(
-                                    xm.get_ordinal(), step, loss.item()), flush=True)
-
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
     test_device_loader = pl.MpDeviceLoader(test_loader, device)
+
+    class XLAProxyOptimizer:
+        """
+        XLA Proxy optimizer for compatibility with
+        torch.Optimizer
+        """
+
+        def __init__(self, optimizer):
+            self.optimizer = optimizer
+
+        def zero_grad(self):
+            self.optimizer.zero_grad()
+
+        def step(self):
+            xm.optimizer_step(self.optimizer)
+
+    optimizer = XLAProxyOptimizer(optimizer)
+
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
-        xm.master_print('Epoch {} train begin {}'.format(epoch, test_utils.now()))
-        train_loop_fn(train_device_loader)
-        xm.master_print('Epoch {} train end {}'.format(epoch, test_utils.now()))
-        test_loop_fn(test_device_loader)
+        train_loop_fn(args, train_device_loader, optimizer, model, criterion, device)
+        test_loop_fn(args, test_device_loader, model, criterion, device)
+
+
+def main(index, args):
+    train_dataset, test_dataset = get_dataset(args)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_data_process)
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_data_process)
+
+    # Get loss function, optimizer, and model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
+    model = model.to(device)
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum)
+    criterion = nn.CTCLoss(blank=28)
+
+    # Train and eval loops
+    for epoch in range(1, args.num_epochs + 1):
+        train_loop_fn(args, train_loader, optimizer, model, criterion, device)
+        test_loop_fn(args, test_loader, model, criterion, device)
+
+
+def spawn_main(main, args):
+    import pudb; pudb.set_trace()
+    if args.use_tpu:
+        import torch_xla.distributed.xla_multiprocessing as xmp
+        xmp.spawn(_main_xla, args=(args,), nprocs=args.world_size)
+    else:
+        main(0, args)
 
 
 if __name__ == '__main__':
-    flags = parse_args()
-    train_dataset, test_dataset = get_dataset()
-    xmp.spawn(train_deepspeech, args=(flags, train_dataset, test_dataset), nprocs=flags.tpu_cores)
+    args = parse_args()
+    spawn_main(main, args)
