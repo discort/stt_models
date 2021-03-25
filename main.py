@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
     parser.add_argument("--datadir", default='/tmp/librispeech')
     parser.add_argument("--log-steps", type=int, default=10)
     parser.add_argument('--logdir', type=str, default=None)
@@ -203,10 +204,15 @@ def main(index, args):
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        prefetch_factor=args.prefetch_factor,
         shuffle=True,
         collate_fn=collate_fn)
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn)
