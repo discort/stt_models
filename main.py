@@ -1,4 +1,5 @@
 import argparse
+import string
 import time
 
 import numpy as np
@@ -125,7 +126,11 @@ def _main_xla(index, args):
     import torch_xla.debug.metrics as met
     import torch_xla.distributed.parallel_loader as pl
 
-    alphabet = Alphabet()
+    char_blank = "*"
+    char_space = " "
+    char_apostrophe = "'"
+    labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
+    alphabet = Alphabet(char_blank, char_space, labels)
     train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
     collate_fn = collate_factory(model_length_function)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -157,7 +162,7 @@ def _main_xla(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=28)
+    criterion = nn.CTCLoss(blank=alphabet.mapping[char_blank])
     decoder = GreedyDecoder()
 
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -187,7 +192,11 @@ def _main_xla(index, args):
 
 
 def main(index, args):
-    alphabet = Alphabet()
+    char_blank = "*"
+    char_space = " "
+    char_apostrophe = "'"
+    labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
+    alphabet = Alphabet(char_blank, char_space, labels)
     train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
     collate_fn = collate_factory(model_length_function)
 
@@ -207,7 +216,7 @@ def main(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=28)
+    criterion = nn.CTCLoss(blank=alphabet.mapping[char_blank])
     decoder = GreedyDecoder()
 
     # Train and eval loops

@@ -12,8 +12,8 @@ def compute_wer(outputs, targets, decoder, alphabet, ignore_case=False):
         targets = targets.lower()
         outputs = outputs.lower()
 
-    targets = [t.split(alphabet.delimiter) for t in targets]
-    outputs = [o.split(alphabet.delimiter) for o in outputs]
+    targets = [t.split(alphabet.char_space) for t in targets]
+    outputs = [o.split(alphabet.char_space) for o in outputs]
 
     wers = [levenshtein_distance(t, o) for t, o in zip(targets, outputs)]
     wers = sum(wers)
