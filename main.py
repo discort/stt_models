@@ -43,7 +43,7 @@ def parse_args():
     return args
 
 
-def collate_factory(model_length_function):
+def collate_factory(model_length_function, mode):
     """
     Based on
     https://github.com/pytorch/audio/blob/14dd917ec60fa69ce3f7c6e3f2eaf520e67928b5/examples/pipeline_wav2letter/datasets.py
@@ -65,6 +65,9 @@ def collate_factory(model_length_function):
             device=inputs.device,
         )
         labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+        if mode == 'train' and torch.cuda.is_available():
+            inputs = inputs.pin_memory()
+            labels = labels.pin_memory()
         return inputs, input_lengths, labels, label_lengths
 
     return collate_fn
@@ -199,7 +202,7 @@ def main(index, args):
     labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
     alphabet = Alphabet(char_blank, char_space, labels)
     train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
-    collate_fn = collate_factory(model_length_function)
+    collate_fn_train = collate_factory(model_length_function, 'train')
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -208,14 +211,15 @@ def main(index, args):
         pin_memory=True,
         prefetch_factor=args.prefetch_factor,
         shuffle=True,
-        collate_fn=collate_fn)
+        collate_fn=collate_fn_train)
+    collate_fn_val = collate_factory(model_length_function, 'val')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=collate_fn)
+        collate_fn=collate_fn_val)
 
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
