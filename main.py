@@ -1,5 +1,4 @@
 import argparse
-import os
 import time
 
 import numpy as np
@@ -9,6 +8,8 @@ import torch.optim as optim
 
 from alphabet import Alphabet
 from dataset import split_dataset
+from decoders import GreedyDecoder
+from metrics import compute_wer
 from models import DeepSpeech
 
 np.random.seed(200)
@@ -67,11 +68,14 @@ def collate_factory(model_length_function):
     return collate_fn
 
 
-def train_loop_fn(args, loader, optimizer, model, criterion, device):
+def train_loop_fn(loader, optimizer, model, criterion, device, epoch, decoder, alphabet):
     running_loss = 0.0
+    total_words = 0
+    cumulative_wer = 0
     model.train()
     for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
         inputs, labels = inputs.to(device), labels.to(device)
+        input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
 
@@ -81,20 +85,38 @@ def train_loop_fn(args, loader, optimizer, model, criterion, device):
         optimizer.step()
 
         running_loss += loss.detach() * inputs.size(0)
+        wers, n_words = compute_wer(out, labels, decoder, alphabet)
+        cumulative_wer += wers
+        total_words += n_words
 
-        if step % args.log_steps == 0:
-            print('({}) Loss={:.5f} Time={}'.format(
-                  step, loss.item(), time.asctime()), flush=True)
+    avg_loss = running_loss / len(loader.dataset)
+    avg_wer = cumulative_wer / total_words
+    print('[Train][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
+        epoch, avg_loss, avg_wer, time.asctime()), flush=True)
 
 
-def test_loop_fn(args, loader, model, criterion, device):
+def test_loop_fn(loader, model, criterion, device, epoch, decoder, alphabet):
     running_loss = 0.0
+    total_words = 0
+    cumulative_wer = 0
+
     model.eval()
     with torch.no_grad():
         for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
+
             running_loss += loss.detach() * inputs.size(0)
+            wers, n_words = compute_wer(out, labels, decoder, alphabet)
+            cumulative_wer += wers
+            total_words += n_words
+
+        avg_loss = running_loss / len(loader.dataset)
+        avg_wer = cumulative_wer / total_words
+        print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
+            epoch, avg_loss, avg_wer, time.asctime()), flush=True)
 
 
 def _main_xla(index, args):
@@ -136,6 +158,7 @@ def _main_xla(index, args):
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28)
+    decoder = GreedyDecoder()
 
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
     test_device_loader = pl.MpDeviceLoader(test_loader, device)
@@ -159,8 +182,8 @@ def _main_xla(index, args):
 
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
-        train_loop_fn(args, train_device_loader, optimizer, model, criterion, device)
-        test_loop_fn(args, test_device_loader, model, criterion, device)
+        train_loop_fn(train_device_loader, optimizer, model, criterion, device, decoder, alphabet)
+        test_loop_fn(test_device_loader, model, criterion, device, decoder, alphabet)
 
 
 def main(index, args):
@@ -185,11 +208,25 @@ def main(index, args):
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum)
     criterion = nn.CTCLoss(blank=28)
+    decoder = GreedyDecoder()
 
     # Train and eval loops
     for epoch in range(1, args.num_epochs + 1):
-        train_loop_fn(args, train_loader, optimizer, model, criterion, device)
-        test_loop_fn(args, test_loader, model, criterion, device)
+        train_loop_fn(train_loader,
+                      optimizer,
+                      model,
+                      criterion,
+                      device,
+                      epoch,
+                      decoder,
+                      alphabet)
+        test_loop_fn(test_loader,
+                     model,
+                     criterion,
+                     device,
+                     epoch,
+                     decoder,
+                     alphabet)
 
 
 def spawn_main(main, args):

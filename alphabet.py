@@ -1,6 +1,7 @@
 class Alphabet:
     """Maps characters to integers and vice versa"""
     _FIRST_ASCII_CHAR_IDX = 97
+    delimiter = ' '
 
     def __init__(self):
         self.char_map = {}
@@ -31,7 +32,9 @@ class Alphabet:
 
     def int_to_text(self, labels):
         """ Use a character map and convert integer labels to an text sequence """
-        string = []
-        for i in labels:
-            string.append(self.index_map[i])
-        return ''.join(string).replace('<SPACE>', ' ')
+        if len(labels) > 0 and isinstance(labels[0], list):
+            return [self.int_to_text(label) for label in labels]
+        else:
+            string = [self.index_map[i] for i in labels]
+            string = ''.join(string).replace('<SPACE>', ' ')
+            return string
