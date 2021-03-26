@@ -29,15 +29,15 @@ class ProcessedDataset(torch.utils.data.Dataset):
         return transformed, target
 
 
-def get_dataset(datadir, url="dev-clean"):
+def get_dataset(datadir, data_url):
     if not os.path.exists(datadir):
         os.makedirs(datadir)
 
-    dataset = LIBRISPEECH(root=datadir, url=url, download=True)
+    dataset = LIBRISPEECH(root=datadir, url=data_url, download=True)
     return dataset
 
 
-def split_dataset(datadir, alphabet):
+def split_dataset(datadir, data_url, alphabet):
     sample_rate = 16000
     win_len = 20  # in milliseconds
     n_fft = int(sample_rate * win_len / 1000)  # 320
@@ -46,7 +46,7 @@ def split_dataset(datadir, alphabet):
     transform = nn.Sequential(*[
         transforms.Spectrogram(n_fft=n_fft, hop_length=hop_length),
     ])
-    dataset = get_dataset(datadir)
+    dataset = get_dataset(datadir, data_url)
     dataset = ProcessedDataset(dataset, transform, alphabet)
 
     train_size = int(0.8 * len(dataset))

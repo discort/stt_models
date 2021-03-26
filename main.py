@@ -1,5 +1,4 @@
 import argparse
-import string
 import time
 
 import numpy as np
@@ -7,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from alphabet import Alphabet
+from alphabet import alphabet_factory
 from dataset import split_dataset
 from decoders import GreedyDecoder
 from metrics import compute_wer
@@ -37,6 +36,7 @@ def parse_args():
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--prefetch-factor", type=int, default=2)
     parser.add_argument("--datadir", default='/tmp/librispeech')
+    parser.add_argument("--data-url", default='dev-other')
     parser.add_argument("--log-steps", type=int, default=10)
     parser.add_argument('--logdir', type=str, default=None)
     args = parser.parse_args()
@@ -65,9 +65,6 @@ def collate_factory(model_length_function, mode):
             device=inputs.device,
         )
         labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-        if mode == 'train' and torch.cuda.is_available():
-            inputs = inputs.pin_memory()
-            labels = labels.pin_memory()
         return inputs, input_lengths, labels, label_lengths
 
     return collate_fn
@@ -130,12 +127,8 @@ def _main_xla(index, args):
     import torch_xla.debug.metrics as met
     import torch_xla.distributed.parallel_loader as pl
 
-    char_blank = "*"
-    char_space = " "
-    char_apostrophe = "'"
-    labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
-    alphabet = Alphabet(char_blank, char_space, labels)
-    train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
+    alphabet = alphabet_factory()
+    train_dataset, test_dataset = split_dataset(args.datadir, args.data_url, alphabet)
     collate_fn = collate_factory(model_length_function)
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
@@ -166,7 +159,7 @@ def _main_xla(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=alphabet.mapping[char_blank])
+    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
 
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -189,19 +182,20 @@ def _main_xla(index, args):
 
     optimizer = XLAProxyOptimizer(optimizer)
 
-    # Train and eval loops
-    for epoch in range(1, args.num_epochs + 1):
-        train_loop_fn(train_device_loader, optimizer, model, criterion, device, decoder, alphabet)
-        test_loop_fn(test_device_loader, model, criterion, device, decoder, alphabet)
+    train_eval_fn(args.num_epochs,
+                  train_device_loader,
+                  test_device_loader,
+                  optimizer,
+                  model,
+                  criterion,
+                  device,
+                  decoder,
+                  alphabet)
 
 
 def main(index, args):
-    char_blank = "*"
-    char_space = " "
-    char_apostrophe = "'"
-    labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
-    alphabet = Alphabet(char_blank, char_space, labels)
-    train_dataset, test_dataset = split_dataset(args.datadir, alphabet)
+    alphabet = alphabet_factory()
+    train_dataset, test_dataset = split_dataset(args.datadir, args.data_url, alphabet)
     collate_fn_train = collate_factory(model_length_function, 'train')
 
     train_loader = torch.utils.data.DataLoader(
@@ -226,11 +220,31 @@ def main(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=alphabet.mapping[char_blank])
+    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
+    train_eval_fn(args.num_epochs,
+                  train_loader,
+                  test_loader,
+                  optimizer,
+                  model,
+                  criterion,
+                  device,
+                  decoder,
+                  alphabet)
 
+
+def train_eval_fn(num_epochs,
+                  train_loader,
+                  test_loader,
+                  optimizer,
+                  model,
+                  criterion,
+                  device,
+                  decoder,
+                  alphabet):
     # Train and eval loops
-    for epoch in range(1, args.num_epochs + 1):
+    for epoch in range(1, num_epochs + 1):
+        print('start', time.asctime())
         train_loop_fn(train_loader,
                       optimizer,
                       model,

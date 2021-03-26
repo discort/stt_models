@@ -1,4 +1,14 @@
 import collections
+import string
+
+
+def alphabet_factory():
+    char_blank = "*"
+    char_space = " "
+    char_apostrophe = "'"
+    labels = char_blank + char_space + char_apostrophe + string.ascii_lowercase
+    alphabet = Alphabet(char_blank, char_space, labels)
+    return alphabet
 
 
 class Alphabet:
