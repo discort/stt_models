@@ -139,7 +139,7 @@ def _main_xla(index, args):
     import torch_xla.distributed.parallel_loader as pl
 
     alphabet = alphabet_factory()
-    train_dataset, test_dataset = split_dataset(args.datadir, args.data_url, alphabet)
+    train_dataset, test_dataset = split_dataset(args, alphabet)
     collate_fn_train = collate_factory(model_length_function, 'train')
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
