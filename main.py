@@ -129,7 +129,7 @@ def _main_xla(index, args):
 
     alphabet = alphabet_factory()
     train_dataset, test_dataset = split_dataset(args.datadir, args.data_url, alphabet)
-    collate_fn = collate_factory(model_length_function)
+    collate_fn_train = collate_factory(model_length_function, 'train')
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
         num_replicas=xm.xrt_world_size(),
@@ -141,14 +141,15 @@ def _main_xla(index, args):
         batch_size=args.batch_size,
         sampler=train_sampler,
         num_workers=args.num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_train,
         drop_last=True)
+    collate_fn_val = collate_factory(model_length_function, 'val')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_val,
         drop_last=True)
 
     # Scale learning rate to world size
