@@ -24,19 +24,29 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Train DeepSpeech model on TPU using librispeech dataset"
     )
-    # Device args
+    # Loader args
     parser.add_argument("--use-tpu", type=bool, default=False)
     parser.add_argument(
         "--world-size", type=int, default=8, choices=[1, 8]
     )
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
-    parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--prefetch-factor", type=int, default=2)
+    # Preprocessing args
+    parser.add_argument(
+        "--window-length", type=int, default=20, help="Widow length in ms"
+    )
+    parser.add_argument(
+        "--window-stride", type=int, default=20, help="Stride between windows in ms"
+    )
+    # Optimizer args
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--momentum", type=float, default=0.9)
+    # Training args
+    parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--datadir", default='/tmp/librispeech')
-    parser.add_argument("--data-url", default='dev-other')
+    parser.add_argument("--train-data-urls", type=str, nargs="+", default=['train-clean-100'])
+    parser.add_argument("--val-data-urls", type=str, nargs="+", default=['dev-clean'])
     parser.add_argument("--log-steps", type=int, default=10)
     parser.add_argument('--logdir', type=str, default=None)
     args = parser.parse_args()
@@ -74,24 +84,24 @@ def train_loop_fn(loader, optimizer, model, criterion, device, epoch, decoder, a
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
+    dataset_len = 0
     model.train()
-    for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
-        inputs, labels = inputs.to(device), labels.to(device)
-        input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
+    for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader, start=1):
+        inputs = inputs.to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
-
         out = model(inputs)
         loss = criterion(out, labels, input_lengths, label_lengths)
         loss.backward()
         optimizer.step()
 
+        dataset_len += inputs.size(0)
         running_loss += loss.detach() * inputs.size(0)
         wers, n_words = compute_wer(out, labels, decoder, alphabet)
         cumulative_wer += wers
         total_words += n_words
 
-    avg_loss = running_loss / len(loader.dataset)
+    avg_loss = running_loss / len(dataset_len)
     avg_wer = cumulative_wer / total_words
     print('[Train][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
         epoch, avg_loss, avg_wer, time.asctime()), flush=True)
@@ -101,21 +111,22 @@ def test_loop_fn(loader, model, criterion, device, epoch, decoder, alphabet):
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
+    dataset_len = 0
 
     model.eval()
     with torch.no_grad():
         for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
-            inputs, labels = inputs.to(device), labels.to(device)
-            input_lengths, label_lengths = input_lengths.to(device), label_lengths.to(device)
+            inputs = inputs.to(device)
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
 
+            dataset_len += inputs.size(0)
             running_loss += loss.detach() * inputs.size(0)
             wers, n_words = compute_wer(out, labels, decoder, alphabet)
             cumulative_wer += wers
             total_words += n_words
 
-        avg_loss = running_loss / len(loader.dataset)
+        avg_loss = running_loss / len(dataset_len)
         avg_wer = cumulative_wer / total_words
         print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
             epoch, avg_loss, avg_wer, time.asctime()), flush=True)
@@ -160,7 +171,8 @@ def _main_xla(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
-    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
+    # CTCLoss is computed faster on cpu significantly
+    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank]).to(torch.device('cpu'))
     decoder = GreedyDecoder()
 
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -196,7 +208,7 @@ def _main_xla(index, args):
 
 def main(index, args):
     alphabet = alphabet_factory()
-    train_dataset, test_dataset = split_dataset(args.datadir, args.data_url, alphabet)
+    train_dataset, test_dataset = split_dataset(args, alphabet)
     collate_fn_train = collate_factory(model_length_function, 'train')
 
     train_loader = torch.utils.data.DataLoader(

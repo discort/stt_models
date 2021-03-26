@@ -13,7 +13,8 @@ References:
     --batch-size 8 \
     --num-epochs 10
 
-## Run on TPU (not recommended since TPU needs to recompile the RNN graph for each training example)
+## Run on TPU
+* CTCLoss is currently (March 2021) is not supported on XLA ([source](https://github.com/pytorch/xla/issues/2163#issuecomment-639486271))
 
 ### Create a Google Cloud [project](https://cloud.google.com/resource-manager/docs/creating-managing-projects)
 
@@ -90,9 +91,11 @@ References:
     python main.py \
     --use-tpu 1 \
     --world-size 1 \
-    --num-workers 1 \
-    --batch-size 128 \
-    --num-epochs 10
+    --num-workers 0 \
+    --batch-size 256 \
+    --train-data-urls train-clean-100 train-clean-360 train-other-500 \
+    --val-data-urls dev-clean \
+    --num-epochs 1
 
 #### List TPU Node+VM
     gcloud compute tpus list --zone=europe-west4-a

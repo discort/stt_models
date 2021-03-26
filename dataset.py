@@ -37,20 +37,24 @@ def get_dataset(datadir, data_url):
     return dataset
 
 
-def split_dataset(datadir, data_url, alphabet):
+def prepare_transformations(window_length=20, window_stride=10):
     sample_rate = 16000
-    win_len = 20  # in milliseconds
-    n_fft = int(sample_rate * win_len / 1000)  # 320
-    hop_size = 10  # in milliseconds
-    hop_length = int(sample_rate * hop_size / 1000)  # 160
+    n_fft = int(sample_rate * window_length / 1000)  # 320
+    hop_length = int(sample_rate * window_stride / 1000)  # 160
     transform = nn.Sequential(*[
         transforms.Spectrogram(n_fft=n_fft, hop_length=hop_length),
     ])
-    dataset = get_dataset(datadir, data_url)
-    dataset = ProcessedDataset(dataset, transform, alphabet)
+    return transform
 
-    train_size = int(0.8 * len(dataset))
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(
-        dataset, [train_size, test_size])
-    return train_dataset, test_dataset
+
+def split_dataset(args, alphabet):
+    transform = prepare_transformations(args.window_length, args.window_stride)
+    train_dataset = torch.utils.data.ConcatDataset(
+        [ProcessedDataset(get_dataset(args.datadir, ds), transform, alphabet)
+         for ds in args.train_data_urls]
+    )
+    val_dataset = torch.utils.data.ConcatDataset(
+        [ProcessedDataset(get_dataset(args.datadir, ds), transform, alphabet)
+         for ds in args.val_data_urls]
+    )
+    return train_dataset, val_dataset
