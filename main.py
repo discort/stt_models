@@ -171,8 +171,7 @@ def _main_xla(index, args):
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
-    # CTCLoss is computed faster on cpu significantly
-    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank]).to(torch.device('cpu'))
+    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
 
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
@@ -218,7 +217,8 @@ def main(index, args):
         pin_memory=True,
         prefetch_factor=args.prefetch_factor,
         shuffle=True,
-        collate_fn=collate_fn_train)
+        collate_fn=collate_fn_train,
+        drop_last=True)
     collate_fn_val = collate_factory(model_length_function, 'val')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
@@ -226,7 +226,8 @@ def main(index, args):
         prefetch_factor=args.prefetch_factor,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=collate_fn_val)
+        collate_fn=collate_fn_val,
+        drop_last=True)
 
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
