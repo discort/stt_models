@@ -141,11 +141,14 @@ def _main_xla(index, args):
     alphabet = alphabet_factory()
     train_dataset, test_dataset = split_dataset(args, alphabet)
     collate_fn_train = collate_factory(model_length_function, 'train')
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset,
-        num_replicas=xm.xrt_world_size(),
-        rank=xm.get_ordinal(),
-        shuffle=True)
+    if xm.xrt_world_size() > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset,
+            num_replicas=xm.xrt_world_size(),
+            rank=xm.get_ordinal(),
+            shuffle=True)
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,

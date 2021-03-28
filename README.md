@@ -14,7 +14,8 @@ References:
     --num-epochs 10
 
 ## Run on TPU
-* CTCLoss is currently (March 2021) is not supported on XLA ([source](https://github.com/pytorch/xla/issues/2163#issuecomment-639486271))
+* TPU needs to recompile the RNN graph for each training example
+* CTCLoss is currently (March 2021) is not supported on XLA ([source](https://github.com/pytorch/xla/issues/2163#issuecomment-639486271)) and [here](https://github.com/pytorch/xla/issues/2844)
 
 ### Create a Google Cloud [project](https://cloud.google.com/resource-manager/docs/creating-managing-projects)
 
@@ -56,7 +57,7 @@ References:
     --machine-type=n1-highmem-16 \
     --image-family=torch-xla \
     --image-project=ml-images  \
-    --boot-disk-size=200GB \
+    --boot-disk-size=300GB \
     --scopes=https://www.googleapis.com/auth/cloud-platform
 
 #### Connect to the new Compute Engine instance
@@ -92,7 +93,7 @@ References:
     --use-tpu 1 \
     --world-size 1 \
     --num-workers 0 \
-    --batch-size 256 \
+    --batch-size 128 \
     --train-data-urls train-clean-100 train-clean-360 train-other-500 \
     --val-data-urls dev-clean \
     --num-epochs 1
