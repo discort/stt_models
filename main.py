@@ -179,6 +179,7 @@ def test_loop_fn(loader,
         avg_wer = cumulative_wer / total_words
         print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
             epoch, avg_loss, avg_wer, time.asctime()), flush=True)
+        return avg_loss
 
 
 def _main_xla(index, args):
