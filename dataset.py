@@ -9,8 +9,9 @@ from torchaudio.datasets import LIBRISPEECH
 class ProcessedDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, transforms, alphabet):
         self.dataset = dataset
-        self.transforms = transforms
         self.alphabet = alphabet
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.transforms = transforms.to(self.device)
 
     def __getitem__(self, item):
         item = self.dataset[item]
@@ -20,11 +21,11 @@ class ProcessedDataset(torch.utils.data.Dataset):
         return len(self.dataset)
 
     def _process(self, item):
-        transformed = item[0]
+        transformed = item[0].to(self.device)
 
         transformed = self.transforms(transformed)
         target = self.alphabet.text_to_int(item[2].lower())
-        target = torch.tensor(target, dtype=torch.long, device=transformed.device)
+        target = torch.tensor(target, dtype=torch.long)
 
         return transformed, target
 

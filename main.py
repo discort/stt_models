@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchaudio.datasets.utils import bg_iterator
+# Use nn.CTCLoss when https://github.com/pytorch/pytorch/issues/17798 will be resolved
+from warpctc_pytorch import CTCLoss
 
 from alphabet import alphabet_factory
 from dataset import split_dataset
@@ -66,6 +68,10 @@ def parse_args():
     parser.add_argument("--momentum", type=float, default=0.9)
     # Training args
     parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument(
+        "--checkpoint", default="", type=str, metavar="PATH",
+        help="path to latest checkpoint",
+    )
     parser.add_argument("--datadir", default='/tmp/librispeech')
     parser.add_argument("--train-data-urls", type=str, nargs="+", default=['train-clean-100'])
     parser.add_argument("--val-data-urls", type=str, nargs="+", default=['dev-clean'])
@@ -86,7 +92,6 @@ def collate_factory(model_length_function):
         input_lengths = torch.tensor(
             [model_length_function(i) for i in inputs],
             dtype=torch.long,
-            device=inputs[0].device,
         )
         inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
 
@@ -94,7 +99,6 @@ def collate_factory(model_length_function):
         label_lengths = torch.tensor(
             [label.shape[0] for label in labels],
             dtype=torch.long,
-            device=inputs.device,
         )
         labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
         return inputs, input_lengths, labels, label_lengths
@@ -126,8 +130,7 @@ def train_loop_fn(loader,
     dataset_len = 0
     model.train()
     for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
-        inputs = inputs.to(device)
-        labels = labels.to(device)
+        labels = labels.reshape(-1)
         # zero the parameter gradients
         optimizer.zero_grad()
         out = model(inputs)
@@ -145,7 +148,7 @@ def train_loop_fn(loader,
     avg_loss = running_loss / dataset_len
     avg_wer = cumulative_wer / total_words
     print('[Train][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-        epoch, avg_loss, avg_wer, time.asctime()), flush=True)
+        epoch, avg_loss.item(), avg_wer, time.asctime()), flush=True)
 
 
 def test_loop_fn(loader,
@@ -163,8 +166,7 @@ def test_loop_fn(loader,
     model.eval()
     with torch.no_grad():
         for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            labels = labels.reshape(-1)
 
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
@@ -178,7 +180,7 @@ def test_loop_fn(loader,
         avg_loss = running_loss / dataset_len
         avg_wer = cumulative_wer / total_words
         print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-            epoch, avg_loss, avg_wer, time.asctime()), flush=True)
+            epoch, avg_loss.item(), avg_wer, time.asctime()), flush=True)
         return avg_loss
 
 
@@ -254,7 +256,8 @@ def _main_xla(index, args):
                   criterion,
                   device,
                   decoder,
-                  alphabet)
+                  alphabet,
+                  args.checkpoint)
 
 
 def main(index, args):
@@ -266,7 +269,7 @@ def main(index, args):
         train_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        pin_memory=True,
+        #pin_memory=True,
         shuffle=True,
         collate_fn=collate_fn,
         drop_last=True)
@@ -285,7 +288,8 @@ def main(index, args):
     logging.info("Number of parameters: %s", count_parameters(model))
 
     optimizer = get_optimizer(args, model.parameters())
-    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
+    #criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
+    criterion = CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
     train_eval_fn(args.num_epochs,
                   train_loader,
@@ -295,7 +299,8 @@ def main(index, args):
                   criterion,
                   device,
                   decoder,
-                  alphabet)
+                  alphabet,
+                  args.checkpoint)
 
 
 def train_eval_fn(num_epochs,
@@ -306,7 +311,8 @@ def train_eval_fn(num_epochs,
                   criterion,
                   device,
                   decoder,
-                  alphabet):
+                  alphabet,
+                  checkpoint):
     best_loss = 1.0
     # Train and eval loops
     for epoch in range(1, num_epochs + 1):
@@ -334,7 +340,7 @@ def train_eval_fn(num_epochs,
             "best_loss": best_loss,
             "optimizer": optimizer.state_dict(),
         }
-        save_checkpoint(state_dict, is_best)
+        save_checkpoint(state_dict, is_best, checkpoint)
         logging.info("End epoch: %s at %s", epoch, time.asctime())
 
 
