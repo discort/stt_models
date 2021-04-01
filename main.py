@@ -1,10 +1,14 @@
 import argparse
+import logging
+import os
+import shutil
 import time
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torchaudio.datasets.utils import bg_iterator
 
 from alphabet import alphabet_factory
 from dataset import split_dataset
@@ -20,6 +24,24 @@ def model_length_function(tensor):
     return int(tensor.shape[0]) // 2 + 1
 
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def save_checkpoint(state_dict, is_best, filename):
+    tempfile = filename + ".temp"
+
+    # Remove tempfile in case interuption during the copying from tempfile to filename
+    if os.path.isfile(tempfile):
+        os.remove(tempfile)
+
+    torch.save(state_dict, tempfile)
+    if os.path.isfile(tempfile):
+        os.rename(tempfile, filename)
+    if is_best:
+        shutil.copyfile(filename, "model_best.pth")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Train DeepSpeech model on TPU using librispeech dataset"
@@ -31,7 +53,6 @@ def parse_args():
     )
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--prefetch-factor", type=int, default=2)
     # Preprocessing args
     parser.add_argument(
         "--window-length", type=int, default=20, help="Widow length in ms"
@@ -40,6 +61,7 @@ def parse_args():
         "--window-stride", type=int, default=20, help="Stride between windows in ms"
     )
     # Optimizer args
+    parser.add_argument("--optimizer", default="sgd", choices=["sgd", "adam"])
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--momentum", type=float, default=0.9)
     # Training args
@@ -53,7 +75,7 @@ def parse_args():
     return args
 
 
-def collate_factory(model_length_function, mode):
+def collate_factory(model_length_function):
     """
     Based on
     https://github.com/pytorch/audio/blob/14dd917ec60fa69ce3f7c6e3f2eaf520e67928b5/examples/pipeline_wav2letter/datasets.py
@@ -80,17 +102,36 @@ def collate_factory(model_length_function, mode):
     return collate_fn
 
 
-def train_loop_fn(loader, optimizer, model, criterion, device, epoch, decoder, alphabet):
+def get_optimizer(args, parameters):
+    if args.optimizer == "sgd":
+        optimizer = optim.SGD(parameters, lr=args.learning_rate, momentum=args.momentum)
+    elif args.optimizer == "adam":
+        optimizer = optim.Adam(parameters, lr=args.learning_rate)
+    else:
+        raise ValueError(f"Invalid choice: {args.optimizer}")
+    return optimizer
+
+
+def train_loop_fn(loader,
+                  optimizer,
+                  model,
+                  criterion,
+                  device,
+                  epoch,
+                  decoder,
+                  alphabet):
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
     dataset_len = 0
     model.train()
-    for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader, start=1):
+    for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
         inputs = inputs.to(device)
+        labels = labels.to(device)
         # zero the parameter gradients
         optimizer.zero_grad()
         out = model(inputs)
+
         loss = criterion(out, labels, input_lengths, label_lengths)
         loss.backward()
         optimizer.step()
@@ -107,7 +148,13 @@ def train_loop_fn(loader, optimizer, model, criterion, device, epoch, decoder, a
         epoch, avg_loss, avg_wer, time.asctime()), flush=True)
 
 
-def test_loop_fn(loader, model, criterion, device, epoch, decoder, alphabet):
+def test_loop_fn(loader,
+                 model,
+                 criterion,
+                 device,
+                 epoch,
+                 decoder,
+                 alphabet):
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
@@ -115,8 +162,10 @@ def test_loop_fn(loader, model, criterion, device, epoch, decoder, alphabet):
 
     model.eval()
     with torch.no_grad():
-        for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader):
+        for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
             inputs = inputs.to(device)
+            labels = labels.to(device)
+
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
 
@@ -140,7 +189,7 @@ def _main_xla(index, args):
 
     alphabet = alphabet_factory()
     train_dataset, test_dataset = split_dataset(args, alphabet)
-    collate_fn_train = collate_factory(model_length_function, 'train')
+    collate_fn = collate_factory(model_length_function)
     if xm.xrt_world_size() > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
@@ -155,15 +204,14 @@ def _main_xla(index, args):
         batch_size=args.batch_size,
         sampler=train_sampler,
         num_workers=args.num_workers,
-        collate_fn=collate_fn_train,
+        collate_fn=collate_fn,
         drop_last=True)
-    collate_fn_val = collate_factory(model_length_function, 'val')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_fn_val,
+        collate_fn=collate_fn,
         drop_last=True)
 
     # Scale learning rate to world size
@@ -173,7 +221,7 @@ def _main_xla(index, args):
     device = xm.xla_device()
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=args.momentum)
+    optimizer = get_optimizer(args, model.parameters())
     criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
 
@@ -211,32 +259,31 @@ def _main_xla(index, args):
 def main(index, args):
     alphabet = alphabet_factory()
     train_dataset, test_dataset = split_dataset(args, alphabet)
-    collate_fn_train = collate_factory(model_length_function, 'train')
+    collate_fn = collate_factory(model_length_function)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=True,
-        prefetch_factor=args.prefetch_factor,
         shuffle=True,
-        collate_fn=collate_fn_train,
+        collate_fn=collate_fn,
         drop_last=True)
-    collate_fn_val = collate_factory(model_length_function, 'val')
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         num_workers=args.num_workers,
-        prefetch_factor=args.prefetch_factor,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=collate_fn_val,
+        collate_fn=collate_fn,
         drop_last=True)
 
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum)
+    logging.info("Number of parameters: %s", count_parameters(model))
+
+    optimizer = get_optimizer(args, model.parameters())
     criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
     train_eval_fn(args.num_epochs,
@@ -259,9 +306,10 @@ def train_eval_fn(num_epochs,
                   device,
                   decoder,
                   alphabet):
+    best_loss = 1.0
     # Train and eval loops
     for epoch in range(1, num_epochs + 1):
-        print('start', time.asctime())
+        logging.info("Epoch: %s at %s", epoch, time.asctime())
         train_loop_fn(train_loader,
                       optimizer,
                       model,
@@ -270,13 +318,23 @@ def train_eval_fn(num_epochs,
                       epoch,
                       decoder,
                       alphabet)
-        test_loop_fn(test_loader,
-                     model,
-                     criterion,
-                     device,
-                     epoch,
-                     decoder,
-                     alphabet)
+        loss = test_loop_fn(test_loader,
+                            model,
+                            criterion,
+                            device,
+                            epoch,
+                            decoder,
+                            alphabet)
+        is_best = loss < best_loss
+        best_loss = min(loss, best_loss)
+        state_dict = {
+            "epoch": epoch + 1,
+            "state_dict": model.state_dict(),
+            "best_loss": best_loss,
+            "optimizer": optimizer.state_dict(),
+        }
+        save_checkpoint(state_dict, is_best)
+        logging.info("End epoch: %s at %s", epoch, time.asctime())
 
 
 def spawn_main(main, args):
@@ -288,5 +346,7 @@ def spawn_main(main, args):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     args = parse_args()
+    logging.info(args)
     spawn_main(main, args)
