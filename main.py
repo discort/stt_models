@@ -22,8 +22,28 @@ np.random.seed(200)
 torch.manual_seed(200)
 
 
-def model_length_function(tensor):
-    return int(tensor.shape[0]) // 2 + 1
+def model_length_function(tensor, seq_len):
+    # return int(tensor.shape[0]) // 2 + 1
+    return 2 * seq_len + 1
+
+
+def check_loss(loss, loss_value):
+    """
+    Check that warp-ctc loss is valid and will not break training
+    :return: Return if loss is valid, and the error in case it is not
+    """
+    loss_valid = True
+    error = ''
+    if loss_value == float("inf") or loss_value == float("-inf"):
+        loss_valid = False
+        error = "WARNING: received an inf loss"
+    elif torch.isnan(loss).sum() > 0:
+        loss_valid = False
+        error = 'WARNING: received a nan loss, setting loss value to 0'
+    elif loss_value < 0:
+        loss_valid = False
+        error = "WARNING: received a negative loss"
+    return loss_valid, error
 
 
 def count_parameters(model):
@@ -89,18 +109,20 @@ def collate_factory(model_length_function):
 
     def collate_fn(batch):
         inputs = [b[0].squeeze(0).transpose(0, 1) for b in batch]
+        labels = [b[1] for b in batch]
         input_lengths = torch.tensor(
-            [model_length_function(i) for i in inputs],
+            [model_length_function(i, l.shape[0]) for i, l in zip(inputs, labels)],
             dtype=torch.long,
         )
         inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
 
-        labels = [b[1] for b in batch]
+        #labels = [b[1] for b in batch]
         label_lengths = torch.tensor(
             [label.shape[0] for label in labels],
             dtype=torch.long,
         )
-        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+        #labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+        labels = torch.cat(labels)
         return inputs, input_lengths, labels, label_lengths
 
     return collate_fn
@@ -129,18 +151,25 @@ def train_loop_fn(loader,
     cumulative_wer = 0
     dataset_len = 0
     model.train()
-    for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
-        labels = labels.reshape(-1)
+    for inputs, input_lengths, labels, label_lengths in loader:
         # zero the parameter gradients
         optimizer.zero_grad()
         out = model(inputs)
 
         loss = criterion(out, labels, input_lengths, label_lengths)
-        loss.backward()
-        optimizer.step()
+        loss_value = loss.item()
+        # Check to ensure valid loss was calculated
+        valid_loss, error = check_loss(loss, loss_value)
+        if valid_loss:
+            loss.backward()
+            optimizer.step()
+        else:
+            print(error)
+            print('Skipping grad update')
+            loss_value = 0
 
         dataset_len += inputs.size(0)
-        running_loss += loss.detach() * inputs.size(0)
+        running_loss += loss_value * inputs.size(0)
         wers, n_words = compute_wer(out, labels, decoder, alphabet)
         cumulative_wer += wers
         total_words += n_words
@@ -288,7 +317,7 @@ def main(index, args):
     logging.info("Number of parameters: %s", count_parameters(model))
 
     optimizer = get_optimizer(args, model.parameters())
-    #criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
+    #criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank], reduction='sum', zero_infinity=True)
     criterion = CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
     train_eval_fn(args.num_epochs,
