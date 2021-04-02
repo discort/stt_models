@@ -177,7 +177,7 @@ def train_loop_fn(loader,
     avg_loss = running_loss / dataset_len
     avg_wer = cumulative_wer / total_words
     print('[Train][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-        epoch, avg_loss.item(), avg_wer, time.asctime()), flush=True)
+        epoch, avg_loss, avg_wer, time.asctime()), flush=True)
 
 
 def test_loop_fn(loader,
@@ -209,7 +209,7 @@ def test_loop_fn(loader,
         avg_loss = running_loss / dataset_len
         avg_wer = cumulative_wer / total_words
         print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-            epoch, avg_loss.item(), avg_wer, time.asctime()), flush=True)
+            epoch, avg_loss, avg_wer, time.asctime()), flush=True)
         return avg_loss
 
 
