@@ -190,9 +190,7 @@ def test_loop_fn(loader,
 
     model.eval()
     with torch.no_grad():
-        for inputs, input_lengths, labels, label_lengths in bg_iterator(loader, maxsize=2):
-            labels = labels.reshape(-1)
-
+        for inputs, input_lengths, labels, label_lengths in loader:
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
 
