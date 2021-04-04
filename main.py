@@ -9,8 +9,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchaudio.datasets.utils import bg_iterator
-# Use nn.CTCLoss when https://github.com/pytorch/pytorch/issues/17798 will be resolved
-from warpctc_pytorch import CTCLoss
 
 from alphabet import alphabet_factory
 from dataset import split_dataset
@@ -22,9 +20,8 @@ np.random.seed(200)
 torch.manual_seed(200)
 
 
-def model_length_function(tensor, seq_len):
-    # return int(tensor.shape[0]) // 2 + 1
-    return 2 * seq_len + 1
+def model_length_function(tensor):
+    return int(tensor.shape[0]) // 2 + 1
 
 
 def check_loss(loss, loss_value):
@@ -109,20 +106,18 @@ def collate_factory(model_length_function):
 
     def collate_fn(batch):
         inputs = [b[0].squeeze(0).transpose(0, 1) for b in batch]
-        labels = [b[1] for b in batch]
         input_lengths = torch.tensor(
-            [model_length_function(i, l.shape[0]) for i, l in zip(inputs, labels)],
+            [model_length_function(i) for i in inputs],
             dtype=torch.long,
         )
         inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
 
-        #labels = [b[1] for b in batch]
+        labels = [b[1] for b in batch]
         label_lengths = torch.tensor(
             [label.shape[0] for label in labels],
             dtype=torch.long,
         )
-        #labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-        labels = torch.cat(labels)
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
         return inputs, input_lengths, labels, label_lengths
 
     return collate_fn
@@ -162,6 +157,7 @@ def train_loop_fn(loader,
         valid_loss, error = check_loss(loss, loss_value)
         if valid_loss:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 400)
             optimizer.step()
         else:
             print(error)
@@ -202,7 +198,7 @@ def test_loop_fn(loader,
 
             dataset_len += inputs.size(0)
             running_loss += loss.detach() * inputs.size(0)
-            wers, n_words = compute_wer(out, labels, decoder, alphabet)
+            wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output=True)
             cumulative_wer += wers
             total_words += n_words
 
@@ -317,8 +313,7 @@ def main(index, args):
     logging.info("Number of parameters: %s", count_parameters(model))
 
     optimizer = get_optimizer(args, model.parameters())
-    #criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank], reduction='sum', zero_infinity=True)
-    criterion = CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
+    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
     decoder = GreedyDecoder()
     train_eval_fn(args.num_epochs,
                   train_loader,

@@ -43,5 +43,5 @@ class Alphabet:
             return [self.int_to_text(label) for label in labels]
         else:
             string = [self.mapping[i] for i in labels]
-            string = ''.join(string).replace(self.char_blank, ' ')
+            string = ''.join(string).replace(self.char_blank, '')
             return string

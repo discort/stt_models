@@ -1,12 +1,19 @@
 import numpy as np
 
 
-def compute_wer(outputs, targets, decoder, alphabet, ignore_case=False):
+def compute_wer(outputs, targets, decoder, alphabet, ignore_case=False, print_output=False):
     outputs = outputs.transpose(0, 1).to("cpu")
     outputs = decoder(outputs)
 
     outputs = alphabet.int_to_text(outputs.tolist())
     targets = alphabet.int_to_text(targets.tolist())
+    if print_output:
+        print_length = 20
+        for i in range(2):
+            # Print a few examples
+            output_print = outputs[i].ljust(print_length)[:print_length]
+            target_print = targets[i].ljust(print_length)[:print_length]
+            print(f"Target: {target_print}    Output: {output_print}")
 
     if ignore_case is True:
         targets = targets.lower()
