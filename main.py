@@ -92,7 +92,7 @@ def parse_args():
     parser.add_argument("--datadir", default='/tmp/librispeech')
     parser.add_argument("--train-data-urls", type=str, nargs="+", default=['train-clean-100'])
     parser.add_argument("--val-data-urls", type=str, nargs="+", default=['dev-clean'])
-    parser.add_argument("--log-steps", type=int, default=10)
+    parser.add_argument("--log-steps", type=int, default=100)
     parser.add_argument('--logdir', type=str, default=None)
     args = parser.parse_args()
     return args
@@ -140,13 +140,14 @@ def train_loop_fn(loader,
                   device,
                   epoch,
                   decoder,
-                  alphabet):
+                  alphabet,
+                  log_steps):
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
     dataset_len = 0
     model.train()
-    for inputs, input_lengths, labels, label_lengths in loader:
+    for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader, 1):
         # zero the parameter gradients
         optimizer.zero_grad()
         out = model(inputs)
@@ -166,7 +167,11 @@ def train_loop_fn(loader,
 
         dataset_len += inputs.size(0)
         running_loss += loss_value * inputs.size(0)
-        wers, n_words = compute_wer(out, labels, decoder, alphabet)
+        if step % log_steps == 0:
+            print_output = True
+        else:
+            print_output = False
+        wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output)
         cumulative_wer += wers
         total_words += n_words
 
@@ -322,7 +327,8 @@ def main(index, args):
                   device,
                   decoder,
                   alphabet,
-                  args.checkpoint)
+                  args.checkpoint,
+                  args.log_steps)
 
 
 def train_eval_fn(num_epochs,
@@ -334,7 +340,8 @@ def train_eval_fn(num_epochs,
                   device,
                   decoder,
                   alphabet,
-                  checkpoint):
+                  checkpoint,
+                  log_steps):
     best_loss = 1.0
     # Train and eval loops
     for epoch in range(1, num_epochs + 1):
@@ -346,7 +353,8 @@ def train_eval_fn(num_epochs,
                       device,
                       epoch,
                       decoder,
-                      alphabet)
+                      alphabet,
+                      log_steps)
         loss = test_loop_fn(test_loader,
                             model,
                             criterion,
