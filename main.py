@@ -171,7 +171,7 @@ def train_loop_fn(loader,
             print_output = True
         else:
             print_output = False
-        wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output)
+        wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output=print_output)
         cumulative_wer += wers
         total_words += n_words
 
