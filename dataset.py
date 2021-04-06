@@ -37,7 +37,8 @@ class AddContextFrames(nn.Module):
         """
         # Pad to ensure first and last n_context frames in original signal have
         # at least n_context frames to their left and right respectively.
-        signal = signal.squeeze(0).T
+        device = signal.device
+        signal = signal.cpu().squeeze(0).T
         signal = signal.data.numpy()
         steps, features = signal.shape
         padding = np.zeros((self.n_context, features), dtype=signal.dtype)
@@ -55,7 +56,7 @@ class AddContextFrames(nn.Module):
 
         # Flatten last dim and return a copy to permit writes.
         strided_signal = strided_signal.reshape(steps, -1).copy()
-        strided_signal = torch.tensor(strided_signal).T.unsqueeze(0)
+        strided_signal = torch.tensor(strided_signal, device=device).T.unsqueeze(0)
         return strided_signal
 
 
