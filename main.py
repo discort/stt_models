@@ -79,6 +79,13 @@ def parse_args():
     parser.add_argument(
         "--window-stride", type=int, default=20, help="Stride between windows in ms"
     )
+    parser.add_argument(
+        "--n_mfcc", type=int, default=26, help="Number of mfc coefficients to retain"
+    )
+    parser.add_argument(
+        "--n_context", type=int, default=7,
+        help="Number of context frames to use on each side of the current input frame"
+    )
     # Optimizer args
     parser.add_argument("--optimizer", default="sgd", choices=["sgd", "adam"])
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -161,8 +168,8 @@ def train_loop_fn(loader,
             torch.nn.utils.clip_grad_norm_(model.parameters(), 400)
             optimizer.step()
         else:
-            print(error)
-            print('Skipping grad update')
+            logging.error(error)
+            logging.info('Skipping grad update')
             loss_value = 0
 
         dataset_len += inputs.size(0)
@@ -177,8 +184,8 @@ def train_loop_fn(loader,
 
     avg_loss = running_loss / dataset_len
     avg_wer = cumulative_wer / total_words
-    print('[Train][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-        epoch, avg_loss, avg_wer, time.asctime()), flush=True)
+    logging.info('[Train][%s] Loss=%.5f WER=%.3f Time=%s',
+                 epoch, avg_loss, avg_wer, time.asctime())
 
 
 def test_loop_fn(loader,
@@ -207,8 +214,8 @@ def test_loop_fn(loader,
 
         avg_loss = running_loss / dataset_len
         avg_wer = cumulative_wer / total_words
-        print('[Val][{}] Loss={:.5f} WER={:.3f} Time={}'.format(
-            epoch, avg_loss, avg_wer, time.asctime()), flush=True)
+        logging.info('[Val][%s] Loss=%.5f WER=%.3f Time=%s',
+                     epoch, avg_loss, avg_wer, time.asctime())
         return avg_loss
 
 
@@ -311,7 +318,8 @@ def main(index, args):
 
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
+    in_features = args.n_mfcc * (2 * args.n_context + 1)
+    model = DeepSpeech(in_features=in_features, hidden_size=2048, num_classes=len(alphabet))
     model = model.to(device)
     logging.info("Number of parameters: %s", count_parameters(model))
 

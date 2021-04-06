@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 
@@ -13,7 +15,7 @@ def compute_wer(outputs, targets, decoder, alphabet, ignore_case=False, print_ou
             # Print a few examples
             output_print = outputs[i].ljust(print_length)[:print_length]
             target_print = targets[i].ljust(print_length)[:print_length]
-            print(f"Target: {target_print}    Output: {output_print}")
+            logging.info("Target: %s    Output: %s", target_print, output_print)
 
     if ignore_case is True:
         targets = targets.lower()
