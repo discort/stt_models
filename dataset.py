@@ -8,6 +8,13 @@ from torchaudio.datasets import LIBRISPEECH
 import numpy as np
 
 
+class Normalize(nn.Module):
+    """Normalize a tensor to have zero mean and one standard deviation."""
+
+    def __call__(self, tensor):
+        return (tensor - tensor.mean()) / tensor.std()
+
+
 # https://github.com/MyrtleSoftware/deepspeech/blob/master/src/deepspeech/data/preprocess.py#L73
 class AddContextFrames(nn.Module):
     """Add context frames to each step in the original signal.
@@ -101,6 +108,7 @@ def prepare_transformations(args):
         #transforms.Spectrogram(n_fft=n_fft, hop_length=hop_length),
         transforms.MFCC(n_mfcc=args.n_mfcc, melkwargs=melkwargs),
         AddContextFrames(args.n_context),
+        Normalize(),
     ])
     return transform
 
