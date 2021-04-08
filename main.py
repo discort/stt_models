@@ -21,7 +21,7 @@ torch.manual_seed(200)
 
 
 def model_length_function(tensor):
-    return int(tensor.shape[0]) // 2 + 1
+    return tensor.shape[0]
 
 
 def check_loss(loss, loss_value):
@@ -83,7 +83,7 @@ def parse_args():
         "--n_mfcc", type=int, default=26, help="Number of mfc coefficients to retain"
     )
     parser.add_argument(
-        "--n_context", type=int, default=7,
+        "--n_context", type=int, default=9,
         help="Number of context frames to use on each side of the current input frame"
     )
     # Optimizer args
