@@ -9,10 +9,8 @@ import numpy as np
 
 
 class Normalize(nn.Module):
-    """Normalize a tensor to have zero mean and one standard deviation."""
-
-    def __call__(self, tensor):
-        return (tensor - tensor.mean()) / tensor.std()
+    def forward(self, tensor):
+        return (tensor - tensor.mean(-1, keepdim=True)) / tensor.std(-1, keepdim=True)
 
 
 # https://github.com/MyrtleSoftware/deepspeech/blob/master/src/deepspeech/data/preprocess.py#L73

@@ -150,7 +150,7 @@ def train_loop_fn(loader,
                   alphabet,
                   log_steps):
     running_loss = 0.0
-    dataset_len = 0
+    iteration = 0
     model.train()
     for step, (inputs, input_lengths, labels, label_lengths) in enumerate(loader, 1):
         # zero the parameter gradients
@@ -170,14 +170,14 @@ def train_loop_fn(loader,
             logging.info('Skipping grad update')
             loss_value = 0
 
-        dataset_len += inputs.size(0)
-        running_loss += loss_value * inputs.size(0)
+        iteration += 1
+        running_loss += loss_value
         if step % log_steps == 0:
             wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output=True)
             batch_wer = wers / n_words
             logging.info('Batch WER: %.3f', batch_wer)
 
-    avg_loss = running_loss / dataset_len
+    avg_loss = running_loss / iteration
     logging.info('[Train][%s] Loss=%.5f Time=%s',
                  epoch, avg_loss, time.asctime())
 
@@ -192,7 +192,7 @@ def test_loop_fn(loader,
     running_loss = 0.0
     total_words = 0
     cumulative_wer = 0
-    dataset_len = 0
+    iteration = 0
 
     model.eval()
     with torch.no_grad():
@@ -200,13 +200,13 @@ def test_loop_fn(loader,
             out = model(inputs)
             loss = criterion(out, labels, input_lengths, label_lengths)
 
-            dataset_len += inputs.size(0)
-            running_loss += loss.detach() * inputs.size(0)
+            iteration += 1
+            running_loss += loss.item()
             wers, n_words = compute_wer(out, labels, decoder, alphabet, print_output=True)
             cumulative_wer += wers
             total_words += n_words
 
-        avg_loss = running_loss / dataset_len
+        avg_loss = running_loss / iteration
         avg_wer = cumulative_wer / total_words
         logging.info('[Val][%s] Loss=%.5f WER=%.3f Time=%s',
                      epoch, avg_loss, avg_wer, time.asctime())
@@ -367,7 +367,7 @@ def train_eval_fn(num_epochs,
         is_best = loss < best_loss
         best_loss = min(loss, best_loss)
         state_dict = {
-            "epoch": epoch + 1,
+            "epoch": epoch,
             "state_dict": model.state_dict(),
             "best_loss": best_loss,
             "optimizer": optimizer.state_dict(),
