@@ -87,8 +87,8 @@ def parse_args():
         help="Number of context frames to use on each side of the current input frame"
     )
     # Optimizer args
-    parser.add_argument("--optimizer", default="sgd", choices=["sgd", "adam"])
-    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--optimizer", default="adam", choices=["sgd", "adam"])
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--momentum", type=float, default=0.9)
     # Training args
     parser.add_argument("--num-epochs", type=int, default=1)

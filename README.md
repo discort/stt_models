@@ -8,10 +8,7 @@ References:
 - [Jasper: An End-to-End Convolutional Neural Acoustic Model](https://arxiv.org/abs/1904.03288) (WIP)
 
 ## Run on CPU/GPU
-    python main.py \
-    --num-workers 1 \
-    --batch-size 8 \
-    --num-epochs 10
+    python main.py --num-workers 0 --batch-size 32 --train-data-urls train-clean-100 train-clean-360 --num-epochs 15 --window-stride 20 --optimizer adam --learning-rate 3e-4 --log-steps 100 --checkpoint test
 
 ## Run on TPU
 * TPU needs to recompile the RNN graph for each training example
