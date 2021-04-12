@@ -1,4 +1,5 @@
 import collections
+import itertools
 import string
 
 
@@ -43,5 +44,6 @@ class Alphabet:
             return [self.int_to_text(label) for label in labels]
         else:
             string = [self.mapping[i] for i in labels]
+            string = "".join(i for i, _ in itertools.groupby(string))
             string = ''.join(string).replace(self.char_blank, '')
             return string
