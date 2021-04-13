@@ -1,1 +1,1 @@
-from .deepspeech import DeepSpeech
+from .deepspeech import build_deepspeech

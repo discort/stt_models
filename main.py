@@ -14,7 +14,7 @@ from alphabet import alphabet_factory
 from dataset import split_dataset
 from decoders import GreedyDecoder
 from metrics import compute_wer
-from models import DeepSpeech
+from models import build_deepspeech
 
 np.random.seed(200)
 torch.manual_seed(200)
@@ -251,7 +251,7 @@ def _main_xla(index, args):
 
     # Get loss function, optimizer, and model
     device = xm.xla_device()
-    model = DeepSpeech(in_features=161, hidden_size=2048, num_classes=len(alphabet))
+    model = build_deepspeech(in_features=in_features, num_classes=len(alphabet))
     model = model.to(device)
     optimizer = get_optimizer(args, model.parameters())
     criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
@@ -313,7 +313,7 @@ def main(index, args):
     # Get loss function, optimizer, and model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     in_features = args.n_mfcc * (2 * args.n_context + 1)
-    model = DeepSpeech(in_features=in_features, hidden_size=2048, num_classes=len(alphabet))
+    model = build_deepspeech(in_features=in_features, num_classes=len(alphabet))
     model = model.to(device)
     logging.info("Number of parameters: %s", count_parameters(model))
 

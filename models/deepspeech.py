@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 
 
+def build_deepspeech(in_features, hidden_size=2048, num_classes=29):
+    model = DeepSpeech(in_features=in_features,
+                       hidden_size=hidden_size,
+                       num_classes=num_classes)
+    return model
+
+
 class FullyConnected(nn.Module):
     """
     Args:

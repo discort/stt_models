@@ -9,7 +9,7 @@ from alphabet import alphabet_factory
 from dataset import prepare_transformations, ProcessedDataset, get_dataset
 from decoders import GreedyDecoder
 from main import collate_factory, model_length_function, test_loop_fn
-from models import DeepSpeech
+from models import build_deepspeech
 
 
 def print_size_of_model(model):
@@ -48,7 +48,7 @@ def main(args):
     device = torch.device('cpu')
     checkpoint = torch.load('model_best.pth', map_location=device)
     in_features = args.n_mfcc * (2 * args.n_context + 1)
-    model = DeepSpeech(in_features=in_features, hidden_size=2048, num_classes=len(alphabet))
+    model = build_deepspeech(in_features=in_features, num_classes=len(alphabet))
     model.load_state_dict(checkpoint['state_dict'])
     print_size_of_model(model)
     decoder = GreedyDecoder()
