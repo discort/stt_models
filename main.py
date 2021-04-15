@@ -13,6 +13,7 @@ from torchaudio.datasets.utils import bg_iterator
 from alphabet import alphabet_factory
 from dataset import split_dataset
 from decoders import GreedyDecoder
+from distributed import setup_distributed
 from metrics import compute_wer
 from models import build_deepspeech
 
@@ -70,6 +71,9 @@ def parse_args():
     parser.add_argument(
         "--world-size", type=int, default=8, choices=[1, 8]
     )
+    parser.add_argument(
+        "--distributed", action="store_true", help="enable DistributedDataParallel"
+    )
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
     # Preprocessing args
@@ -105,27 +109,28 @@ def parse_args():
     return args
 
 
+def collate_fn(batch):
+    inputs = [b[0].squeeze(0).transpose(0, 1) for b in batch]
+    input_lengths = torch.tensor(
+        [model_length_function(i) for i in inputs],
+        dtype=torch.long,
+    )
+    inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
+
+    labels = [b[1] for b in batch]
+    label_lengths = torch.tensor(
+        [label.shape[0] for label in labels],
+        dtype=torch.long,
+    )
+    labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+    return inputs, input_lengths, labels, label_lengths
+
+
 def collate_factory(model_length_function):
     """
     Based on
     https://github.com/pytorch/audio/blob/14dd917ec60fa69ce3f7c6e3f2eaf520e67928b5/examples/pipeline_wav2letter/datasets.py
     """
-
-    def collate_fn(batch):
-        inputs = [b[0].squeeze(0).transpose(0, 1) for b in batch]
-        input_lengths = torch.tensor(
-            [model_length_function(i) for i in inputs],
-            dtype=torch.long,
-        )
-        inputs = nn.utils.rnn.pad_sequence(inputs, batch_first=True).unsqueeze(1)
-
-        labels = [b[1] for b in batch]
-        label_lengths = torch.tensor(
-            [label.shape[0] for label in labels],
-            dtype=torch.long,
-        )
-        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-        return inputs, input_lengths, labels, label_lengths
 
     return collate_fn
 
@@ -138,6 +143,35 @@ def get_optimizer(args, parameters):
     else:
         raise ValueError(f"Invalid choice: {args.optimizer}")
     return optimizer
+
+
+def get_dataloader(args, alphabet):
+    train_dataset, test_dataset = split_dataset(args, alphabet)
+    collate_fn = collate_factory(model_length_function)
+
+    if args.distributed:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset)
+    else:
+        sampler = torch.utils.data.RandomSampler(train_dataset)
+
+    loader_params = dict(
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        drop_last=True,
+    )
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        sampler=sampler,
+        pin_memory=True,
+        collate_fn=collate_fn,
+        **loader_params)
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        shuffle=False,
+        collate_fn=collate_fn,
+        **loader_params)
+    return train_loader, test_loader
 
 
 def train_loop_fn(loader,
@@ -213,7 +247,7 @@ def test_loop_fn(loader,
         return avg_loss
 
 
-def _main_xla(index, args):
+def _main_xla(rank, args):
     import torch_xla
     import torch_xla.core.xla_model as xm
     import torch_xla.debug.metrics as met
@@ -286,35 +320,28 @@ def _main_xla(index, args):
                   device,
                   decoder,
                   alphabet,
-                  args.checkpoint)
+                  args.checkpoint,
+                  args.log_steps)
 
 
-def main(index, args):
+def main(rank, args):
+    if args.distributed:
+        setup_distributed(world_size=args.num_workers,
+                          rank=rank,
+                          backend='nccl' if torch.cuda.is_available() else 'gloo')
+
     alphabet = alphabet_factory()
-    train_dataset, test_dataset = split_dataset(args, alphabet)
-    collate_fn = collate_factory(model_length_function)
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        #pin_memory=True,
-        shuffle=True,
-        collate_fn=collate_fn,
-        drop_last=True)
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        num_workers=args.num_workers,
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_fn,
-        drop_last=True)
+    train_loader, test_loader = get_dataloader(args, alphabet)
 
     # Get loss function, optimizer, and model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     in_features = args.n_mfcc * (2 * args.n_context + 1)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_deepspeech(in_features=in_features, num_classes=len(alphabet))
     model = model.to(device)
+    if args.distributed:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[device] if torch.cuda.is_available() else None
+        )
     logging.info("Number of parameters: %s", count_parameters(model))
 
     optimizer = get_optimizer(args, model.parameters())
@@ -380,6 +407,10 @@ def spawn_main(main, args):
     if args.use_tpu:
         import torch_xla.distributed.xla_multiprocessing as xmp
         xmp.spawn(_main_xla, args=(args,), nprocs=args.world_size)
+    if args.distributed:
+        torch.multiprocessing.spawn(
+            main, args=(args,), nprocs=args.world_size, join=True
+        )
     else:
         main(0, args)
 
