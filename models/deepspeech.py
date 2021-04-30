@@ -23,25 +23,22 @@ class FullyConnected(nn.Module):
                  relu_max_clip: int = 20) -> None:
         super(FullyConnected, self).__init__()
         self.fc = nn.Linear(in_features, hidden_size, bias=True)
-        self.nonlinearity = nn.Sequential(*[
-            nn.ReLU(),
-            nn.Hardtanh(0, relu_max_clip)
-        ])
-        if dropout:
-            self.nonlinearity = nn.Sequential(*[
-                self.nonlinearity,
-                nn.Dropout(dropout)
-            ])
+        self.relu_max_clip = relu_max_clip
+        self.dropout = dropout
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc(x)
-        x = self.nonlinearity(x)
+        x = torch.nn.functional.relu(x)
+        x = torch.nn.functional.hardtanh(x, 0, self.relu_max_clip)
+        if self.dropout:
+            x = torch.nn.functional.dropout(x, self.dropout, self.training)
         return x
 
 
 class DeepSpeech(nn.Module):
     """
-    DeepSpeech model architecture from `"Deep Speech: Scaling up end-to-end speech recognition"`
+    DeepSpeech model architecture from
+    `"Deep Speech: Scaling up end-to-end speech recognition"`
     <https://arxiv.org/abs/1412.5567> paper.
 
     Args:
@@ -52,29 +49,26 @@ class DeepSpeech(nn.Module):
 
     def __init__(self,
                  in_features: int,
-                 hidden_size: int,
-                 num_classes: int,
+                 hidden_size: int = 2048,
+                 num_classes: int = 40,
                  dropout: float = 0.0) -> None:
         super(DeepSpeech, self).__init__()
         self.hidden_size = hidden_size
-        # The first three layers are not recurrent
         self.fc1 = FullyConnected(in_features, hidden_size, dropout)
         self.fc2 = FullyConnected(hidden_size, hidden_size, dropout)
         self.fc3 = FullyConnected(hidden_size, hidden_size, dropout)
-        # The fourth layer is a bi-directional recurrent layer
         self.bi_rnn = nn.RNN(
             hidden_size, hidden_size, num_layers=1, nonlinearity='relu', bidirectional=True)
-        self.nonlinearity = nn.ReLU()
         self.fc4 = FullyConnected(hidden_size, hidden_size, dropout)
-        # The output layer is a standard softmax function
-        # that yields the predicted character probabilities
-        # for each time slice t and character k in the alphabet
-        self.out = nn.Sequential(*[
-            nn.Linear(hidden_size, num_classes),
-            nn.LogSoftmax(dim=2)
-        ])
+        self.out = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): Tensor of dimension (batch_size, num_channels, input_length, num_features).
+        Returns:
+            Tensor: Predictor tensor of dimension (batch_size, input_length, number_of_classes).
+        """
         # N x C x T x F
         x = self.fc1(x)
         # N x C x T x H
@@ -93,5 +87,9 @@ class DeepSpeech(nn.Module):
         x = self.fc4(x)
         # T x N x H
         x = self.out(x)
+        # T x N x num_classes
+        x = x.permute(1, 0, 2)
+        # N x T x num_classes
+        x = torch.nn.functional.log_softmax(x, dim=2)
         # T x N x num_classes
         return x
