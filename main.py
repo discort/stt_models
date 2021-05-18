@@ -63,10 +63,9 @@ def save_checkpoint(state_dict, is_best, filename):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train DeepSpeech model on TPU using librispeech dataset"
+        description="Train DeepSpeech model on GPU using librispeech dataset"
     )
     # Loader args
-    parser.add_argument("--use-tpu", type=bool, default=False)
     parser.add_argument(
         "--world-size", type=int, default=8, choices=[1, 8]
     )
@@ -213,82 +212,6 @@ def test_loop_fn(loader,
         return avg_loss
 
 
-def _main_xla(index, args):
-    import torch_xla
-    import torch_xla.core.xla_model as xm
-    import torch_xla.debug.metrics as met
-    import torch_xla.distributed.parallel_loader as pl
-
-    alphabet = alphabet_factory()
-    train_dataset, test_dataset = split_dataset(args, alphabet)
-    collate_fn = collate_factory(model_length_function)
-    if xm.xrt_world_size() > 1:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(
-            train_dataset,
-            num_replicas=xm.xrt_world_size(),
-            rank=xm.get_ordinal(),
-            shuffle=True)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(train_dataset)
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        sampler=train_sampler,
-        num_workers=args.num_workers,
-        collate_fn=collate_fn,
-        drop_last=True)
-    test_loader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        collate_fn=collate_fn,
-        drop_last=True)
-
-    # Scale learning rate to world size
-    lr = args.learning_rate * xm.xrt_world_size()
-
-    # Get loss function, optimizer, and model
-    device = xm.xla_device()
-    model = build_deepspeech(in_features=in_features, num_classes=len(alphabet))
-    model = model.to(device)
-    optimizer = get_optimizer(args, model.parameters())
-    criterion = nn.CTCLoss(blank=alphabet.mapping[alphabet.char_blank])
-    decoder = GreedyDecoder()
-
-    train_device_loader = pl.MpDeviceLoader(train_loader, device)
-    test_device_loader = pl.MpDeviceLoader(test_loader, device)
-
-    class XLAProxyOptimizer:
-        """
-        XLA Proxy optimizer for compatibility with
-        torch.Optimizer
-        """
-
-        def __init__(self, optimizer):
-            self.optimizer = optimizer
-
-        def zero_grad(self):
-            self.optimizer.zero_grad()
-
-        def step(self):
-            xm.optimizer_step(self.optimizer)
-
-    optimizer = XLAProxyOptimizer(optimizer)
-
-    train_eval_fn(args.num_epochs,
-                  train_device_loader,
-                  test_device_loader,
-                  optimizer,
-                  model,
-                  criterion,
-                  device,
-                  decoder,
-                  alphabet,
-                  args.checkpoint)
-
-
 def main(index, args):
     alphabet = alphabet_factory()
     train_dataset, test_dataset = split_dataset(args, alphabet)
@@ -377,11 +300,7 @@ def train_eval_fn(num_epochs,
 
 
 def spawn_main(main, args):
-    if args.use_tpu:
-        import torch_xla.distributed.xla_multiprocessing as xmp
-        xmp.spawn(_main_xla, args=(args,), nprocs=args.world_size)
-    else:
-        main(0, args)
+    main(0, args)
 
 
 if __name__ == '__main__':
